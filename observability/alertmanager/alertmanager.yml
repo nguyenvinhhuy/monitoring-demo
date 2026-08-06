@@ -1,0 +1,39 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ["alertname", "application", "service"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: ticket-receiver
+  routes:
+    # page: SLO burn-rate fast + service không báo cáo/collector down -> cần xử lý ngay.
+    - matchers:
+        - severity="page"
+      receiver: page-receiver
+      repeat_interval: 1h
+    # ticket: SLO slow-burn + saturation (CPU/heap) -> điều tra nguyên nhân, không cần thức dậy lúc nửa đêm.
+    - matchers:
+        - severity="ticket"
+      receiver: ticket-receiver
+
+receivers:
+  # Demo: chỉ log ra stdout của Alertmanager (xem trong `docker compose logs alertmanager`)
+  # và UI http://localhost:9093. Đổi sang webhook/Slack/PagerDuty thật khi lên prod, ví dụ:
+  #
+  # - name: page-receiver
+  #   slack_configs:
+  #     - api_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+  #       channel: "#alerts-page"
+  #       send_resolved: true
+  - name: page-receiver
+  - name: ticket-receiver
+
+inhibit_rules:
+  # Khi collector đã down, khỏi cần page riêng từng ServiceNotReporting (hệ quả tất yếu).
+  - source_matchers:
+      - alertname="OtelCollectorDown"
+    target_matchers:
+      - alertname="ServiceNotReporting"
+    equal: []

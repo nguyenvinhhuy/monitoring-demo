@@ -1,0 +1,14 @@
+management:
+  otlp:
+    metrics:
+      export:
+        url: http://otel-collector:4318/v1/metrics
+        step: 15s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # Đã xác nhận qua Spring Boot --debug (Conditions Evaluation Report): property kích
+          # hoạt bean OtlpTracingConnectionDetails/Exporters thật là cái này, KHÔNG PHẢI
+          # management.otlp.tracing.endpoint (namespace đó tồn tại nhưng không tạo bean exporter).
+          endpoint: http://otel-collector:4318/v1/traces

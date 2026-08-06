@@ -1,0 +1,46 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Dùng Docker service discovery qua docker.sock để tự động tìm container mới/mất mà không cần
+  # khai báo tay từng container — đúng cách Promtail được thiết kế để dùng trong Docker Compose.
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: "container"
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: "compose_service"
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: "stream"
+    pipeline_stages:
+      # 3 service Spring Boot log dạng JSON (logging.structured.format.console: ecs) — parse ra để
+      # lấy field query được trong Loki. Đã xác nhận thật bằng log JSON thực tế: traceId/spanId/
+      # correlationId là field PHẲNG ở top-level (không lồng dạng trace.id/mdc.correlationId như
+      # đoán ban đầu theo chuẩn ECS thuần) — do Spring Boot tự thêm 3 field này riêng ngoài cấu
+      # trúc ECS. Chỉ "log.level" là lồng đúng kiểu ECS.
+      - json:
+          expressions:
+            level: "log.level"
+            trace_id: "traceId"
+            correlation_id: "correlationId"
+      # Chỉ đưa "level" (cardinality thấp: INFO/WARN/ERROR) thành label thật — label làm tăng số
+      # stream trong Loki, không được đưa trace_id/correlationId (cardinality cực cao, mỗi request
+      # 1 giá trị khác nhau) vào labels giống lỗi cardinality của Prometheus đã tránh ở phần metrics.
+      - labels:
+          level:
+      # trace_id/correlationId vẫn query/filter được (`| trace_id="..."`) nhưng không bị index như
+      # label — đúng cách Loki khuyến nghị lưu field cardinality cao.
+      - structured_metadata:
+          trace_id:
+          correlation_id:

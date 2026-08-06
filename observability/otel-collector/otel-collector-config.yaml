@@ -1,0 +1,48 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  # Expose ở dạng Prometheus text format để Prometheus scrape lại (pull), thay vì Collector
+  # tự đẩy đi. Ở quy mô lớn hơn / multi-cluster, đổi exporter này sang `prometheusremotewrite`
+  # để push thẳng vào Thanos/Cortex/Mimir mà không cần sửa gì ở app hay Prometheus.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+    # Mặc định 5m — Collector vẫn serve giá trị cũ của 1 service đã down suốt 5 phút trước khi
+    # bỏ series khỏi /metrics, khiến absent_over_time() ở services.yml không kịp phát hiện. Hạ
+    # xuống để ServiceNotReporting phản ứng nhanh, khớp với window absent_over_time đang dùng.
+    metric_expiration: 30s
+
+  # Traces đẩy sang Tempo qua OTLP gRPC nội bộ (không phải cổng 4317/4318 của chính Collector này
+  # — đó là Tempo tự có receiver OTLP riêng trong container của nó).
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]

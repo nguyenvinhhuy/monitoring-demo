@@ -1,0 +1,91 @@
+# Kiến trúc push (app -> otel-collector) không có "up{job=...}" theo từng service như kiểu
+# scrape/pull truyền thống — Prometheus chỉ thấy otel-collector là 1 target duy nhất.
+# Để phát hiện 1 service ngưng gửi metrics (down / mất kết nối OTLP), dùng absent_over_time
+# trên 1 metric nghiệp vụ luôn tồn tại khi service còn sống (http_server_requests_milliseconds_count).
+groups:
+  - name: service-health
+    rules:
+      - alert: OtelCollectorDown
+        expr: up{job="otel-collector"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Prometheus không scrape được otel-collector"
+          description: "Toàn bộ metrics từ 3 service (đi qua collector) đang bị mất. Kiểm tra container otel-collector."
+          dashboard_url: "http://localhost:3000/d/services-red/services-red?from=now-1h&to=now"
+          runbook_url: "observability/runbooks.md#otelcollectordown"
+
+      - alert: ServiceNotReporting
+        expr: absent_over_time(http_server_requests_milliseconds_count{application="user-service"}[3m])
+        for: 1m
+        labels:
+          severity: page
+          service: user-service
+        annotations:
+          summary: "user-service không gửi metrics về trong hơn 3 phút"
+          description: "Có thể user-service đã down hoặc mất kết nối OTLP tới otel-collector."
+          dashboard_url: "http://localhost:3000/d/services-red/services-red?var-application={{ $labels.service }}&from=now-1h&to=now"
+          runbook_url: "observability/runbooks.md#servicenotreporting"
+
+      - alert: ServiceNotReporting
+        expr: absent_over_time(http_server_requests_milliseconds_count{application="product-service"}[3m])
+        for: 1m
+        labels:
+          severity: page
+          service: product-service
+        annotations:
+          summary: "product-service không gửi metrics về trong hơn 3 phút"
+          description: "Có thể product-service đã down hoặc mất kết nối OTLP tới otel-collector."
+          dashboard_url: "http://localhost:3000/d/services-red/services-red?var-application={{ $labels.service }}&from=now-1h&to=now"
+          runbook_url: "observability/runbooks.md#servicenotreporting"
+
+      - alert: ServiceNotReporting
+        expr: absent_over_time(http_server_requests_milliseconds_count{application="order-service"}[3m])
+        for: 1m
+        labels:
+          severity: page
+          service: order-service
+        annotations:
+          summary: "order-service không gửi metrics về trong hơn 3 phút"
+          description: "Có thể order-service đã down hoặc mất kết nối OTLP tới otel-collector."
+          dashboard_url: "http://localhost:3000/d/services-red/services-red?var-application={{ $labels.service }}&from=now-1h&to=now"
+          runbook_url: "observability/runbooks.md#servicenotreporting"
+
+  - name: diagnostic-saturation
+    rules:
+      # Tầng phụ, chỉ để điều tra nguyên nhân khi SLO alert đã nổ — không tự page.
+      - alert: JVMHeapUsageHigh
+        expr: >
+          sum by (application) (jvm_memory_used_bytes{area="heap"})
+          /
+          sum by (application) (jvm_memory_max_bytes{area="heap"})
+          > 0.85
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.application }}: heap JVM dùng > 85% trong 10 phút"
+          description: "Không page — dùng để điều tra nguyên nhân khi SLO alert đã nổ (GC pressure, memory leak)."
+          dashboard_url: "http://localhost:3000/d/jvm-overview/jvm-overview?var-application={{ $labels.application }}&from=now-3h&to=now"
+          runbook_url: "observability/runbooks.md#jvmheapusagehigh"
+
+      # LƯU Ý (đã xác minh trên môi trường thật): với Docker Desktop dùng containerd snapshotter
+      # (driver-type: io.containerd.snapshotter.v1 — kiểm tra bằng `docker info`), cAdvisor v0.49
+      # không đọc được layer overlayfs per-container (lỗi "failed to identify the read-write layer
+      # ID"), nên chỉ thấy cgroup gốc (id="/", "/docker"...), KHÔNG có label container_label_*/name
+      # theo từng container. Alert này chỉ hoạt động đúng khi cAdvisor liệt kê được container
+      # (Linux Docker host cổ điển dùng overlay2 graphdriver, hoặc tắt "Use containerd for pulling
+      # and storing images" trong Docker Desktop settings). Xem observability/README.md.
+      - alert: ContainerCPUHigh
+        expr: >
+          sum by (name) (rate(container_cpu_usage_seconds_total{name=~".*(user|product|order)-service.*"}[5m]))
+          > 0.8
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Container {{ $labels.name }} dùng CPU > 80% trong 10 phút"
+          description: "Không page — dùng để điều tra nguyên nhân khi SLO alert đã nổ."
+          dashboard_url: "http://localhost:3000/d/infra-containers/infra-containers?from=now-3h&to=now"
+          runbook_url: "observability/runbooks.md#containercpuhigh"

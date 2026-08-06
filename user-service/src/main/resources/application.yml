@@ -1,0 +1,60 @@
+logging:
+  structured:
+    format:
+      # Spring Boot tự format log console thành JSON chuẩn ECS, tự gộp MDC (correlationId) +
+      # trace.id/span.id (khi có tracing) vào từng dòng — đúng ý định ban đầu của dự án (xem
+      # comment cũ trong CorrelationIdFilter/LogKeys), giờ mới thực sự bật lên.
+      console: ecs
+
+spring:
+  application:
+    name: user-service
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:h2:mem:userdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+server:
+  port: 8080
+
+management:
+  tracing:
+    sampling:
+      # Demo/học tập: sample 100% để dễ thấy trace ngay. Prod thật nên hạ xuống (vd 0.1) hoặc dùng
+      # adaptive/tail-based sampling để không tốn chi phí lưu trữ trace ở quy mô lớn.
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 50ms,100ms,200ms,300ms,500ms,1s,2s
+  otlp:
+    metrics:
+      export:
+        # Mặc định registry-otlp dùng base2 exponential histogram (bỏ qua percentiles-histogram/slo
+        # ở trên) — ép về explicit bucket để bucket boundary khớp với SLO đã khai báo, phục vụ
+        # tính SLI latency bằng bucket cố định (xem observability/prometheus/rules/slo.yml).
+        histogram-flavor: EXPLICIT_BUCKET_HISTOGRAM

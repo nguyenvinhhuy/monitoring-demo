@@ -1,0 +1,42 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: Loki
+    uid: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      # Bấm vào "Tempo" ở 1 dòng log có trace_id (structured metadata do Promtail gắn vào) sẽ
+      # nhảy thẳng sang trace tương ứng bên Tempo — đây là điểm mấu chốt của việc gộp logs+traces
+      # cùng 1 hệ sinh thái Grafana thay vì 2 UI rời rạc (Kibana riêng, Grafana riêng).
+      derivedFields:
+        - datasourceUid: Tempo
+          matcherRegex: "\"traceId\":\"(\\w+)\""
+          name: TraceID
+          url: "$${__value.raw}"
+          urlDisplayLabel: "Xem trace"
+
+  - name: Tempo
+    uid: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: Loki
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+        filterByTraceID: true
+      serviceMap:
+        datasourceUid: Prometheus

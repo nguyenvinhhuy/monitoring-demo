@@ -1,0 +1,118 @@
+# Đã xác nhận thực tế (curl http://otel-collector:8889/metrics) tên metric qua Collector là
+# http_server_requests_milliseconds_* (đơn vị milliseconds — quy ước riêng của registry-otlp,
+# khác với registry Prometheus vốn dùng giây). Bucket le cũng theo ms (vd le="300" = 300ms) và
+# chỉ xuất hiện đúng ranh giới SLO (50/100/200/300/500/1000/2000) khi service có cấu hình
+# management.otlp.metrics.export.histogram-flavor: EXPLICIT_BUCKET_HISTOGRAM (mặc định
+# registry-otlp dùng base2 exponential histogram, bỏ qua percentiles-histogram/slo).
+groups:
+  - name: slo-recording-rules
+    interval: 30s
+    rules:
+      # Availability SLI: tỷ lệ request KHÔNG phải SERVER_ERROR trên tổng request, theo service.
+      - record: sli:availability:ratio_rate5m
+        expr: >
+          sum by (application) (rate(http_server_requests_milliseconds_count{outcome!="SERVER_ERROR"}[5m]))
+          /
+          sum by (application) (rate(http_server_requests_milliseconds_count[5m]))
+      - record: sli:availability:ratio_rate1h
+        expr: >
+          sum by (application) (rate(http_server_requests_milliseconds_count{outcome!="SERVER_ERROR"}[1h]))
+          /
+          sum by (application) (rate(http_server_requests_milliseconds_count[1h]))
+      - record: sli:availability:ratio_rate6h
+        expr: >
+          sum by (application) (rate(http_server_requests_milliseconds_count{outcome!="SERVER_ERROR"}[6h]))
+          /
+          sum by (application) (rate(http_server_requests_milliseconds_count[6h]))
+      - record: sli:availability:ratio_rate3d
+        expr: >
+          sum by (application) (rate(http_server_requests_milliseconds_count{outcome!="SERVER_ERROR"}[3d]))
+          /
+          sum by (application) (rate(http_server_requests_milliseconds_count[3d]))
+
+      # Latency SLI: tỷ lệ request nhanh hơn ngưỡng SLO 300ms, theo service.
+      - record: sli:latency:ratio_rate5m
+        expr: >
+          sum by (application) (rate(http_server_requests_milliseconds_bucket{le="300"}[5m]))
+          /
+          sum by (application) (rate(http_server_requests_milliseconds_count[5m]))
+      - record: sli:latency:ratio_rate1h
+        expr: >
+          sum by (application) (rate(http_server_requests_milliseconds_bucket{le="300"}[1h]))
+          /
+          sum by (application) (rate(http_server_requests_milliseconds_count[1h]))
+      - record: sli:latency:ratio_rate6h
+        expr: >
+          sum by (application) (rate(http_server_requests_milliseconds_bucket{le="300"}[6h]))
+          /
+          sum by (application) (rate(http_server_requests_milliseconds_count[6h]))
+      - record: sli:latency:ratio_rate3d
+        expr: >
+          sum by (application) (rate(http_server_requests_milliseconds_bucket{le="300"}[3d]))
+          /
+          sum by (application) (rate(http_server_requests_milliseconds_count[3d]))
+
+  - name: slo-burn-rate-alerts
+    rules:
+      # SLO availability mục tiêu 99.5%/30 ngày -> error budget = 0.005.
+      # Burn-rate multiplier 14.4 / 1 lấy theo bảng multiwindow multi-burn-rate của Google SRE Workbook.
+      - alert: AvailabilitySLOFastBurn
+        expr: >
+          (1 - sli:availability:ratio_rate5m) > (14.4 * 0.005)
+          and
+          (1 - sli:availability:ratio_rate1h) > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "{{ $labels.application }}: đốt error-budget availability rất nhanh (fast-burn)"
+          description: "Với tốc độ lỗi hiện tại, error-budget 30 ngày sẽ cạn trong vài giờ nếu tiếp diễn. Xem dashboard slo-error-budget."
+          dashboard_url: "http://localhost:3000/d/slo-error-budget/slo-error-budget?var-application={{ $labels.application }}&from=now-3h&to=now"
+          runbook_url: "observability/runbooks.md#availabilityslofastburn"
+
+      - alert: AvailabilitySLOSlowBurn
+        expr: >
+          (1 - sli:availability:ratio_rate6h) > (1 * 0.005)
+          and
+          (1 - sli:availability:ratio_rate3d) > (1 * 0.005)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: availability
+        annotations:
+          summary: "{{ $labels.application }}: đốt error-budget availability chậm nhưng kéo dài (slow-burn)"
+          description: "Suy giảm availability kéo dài nhiều giờ — chưa cần page ngay, cần điều tra trong ngày."
+          dashboard_url: "http://localhost:3000/d/slo-error-budget/slo-error-budget?var-application={{ $labels.application }}&from=now-3d&to=now"
+          runbook_url: "observability/runbooks.md#availabilityslowburn"
+
+      # SLO latency mục tiêu 95% request < 300ms / 30 ngày -> error budget (request chậm) = 0.05.
+      - alert: LatencySLOFastBurn
+        expr: >
+          (1 - sli:latency:ratio_rate5m) > (14.4 * 0.05)
+          and
+          (1 - sli:latency:ratio_rate1h) > (14.4 * 0.05)
+        for: 2m
+        labels:
+          severity: page
+          slo: latency
+        annotations:
+          summary: "{{ $labels.application }}: đốt error-budget latency rất nhanh (fast-burn)"
+          description: "Tỷ lệ request chậm hơn 300ms tăng đột biến."
+          dashboard_url: "http://localhost:3000/d/slo-error-budget/slo-error-budget?var-application={{ $labels.application }}&from=now-3h&to=now"
+          runbook_url: "observability/runbooks.md#latencyslofastburn"
+
+      - alert: LatencySLOSlowBurn
+        expr: >
+          (1 - sli:latency:ratio_rate6h) > (1 * 0.05)
+          and
+          (1 - sli:latency:ratio_rate3d) > (1 * 0.05)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: latency
+        annotations:
+          summary: "{{ $labels.application }}: đốt error-budget latency chậm nhưng kéo dài (slow-burn)"
+          description: "Suy giảm latency kéo dài nhiều giờ."
+          dashboard_url: "http://localhost:3000/d/slo-error-budget/slo-error-budget?var-application={{ $labels.application }}&from=now-3d&to=now"
+          runbook_url: "observability/runbooks.md#latencyslowburn"
